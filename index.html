@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Train Simulator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0a0a08;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      font-family: 'Courier New', Courier, monospace;
+    }
+
+    /* ── CRT scanline overlay ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        to bottom,
+        transparent 0px,
+        transparent 3px,
+        rgba(0,0,0,0.08) 3px,
+        rgba(0,0,0,0.08) 4px
+      );
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #terminal {
+      width: 700px;
+      max-width: 96vw;
+      background: #0e0d09;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow:
+        0 0 0 1px #2a2518,
+        0 0 60px rgba(210, 140, 30, 0.12),
+        0 30px 80px rgba(0,0,0,0.9);
+    }
+
+    /* macOS-style title bar */
+    .titlebar {
+      background: #1a1810;
+      border-bottom: 1px solid #2a2518;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot.r { background: #ff5f57; }
+    .dot.y { background: #ffbd2e; }
+    .dot.g { background: #28c840; }
+    .title-text {
+      flex: 1;
+      text-align: center;
+      font-size: 12px;
+      color: #5a5030;
+      letter-spacing: 0.05em;
+    }
+    .title-spacer { width: 52px; } /* balance the dots */
+
+    /* ASCII header */
+    .loco {
+      padding: 16px 20px 0;
+      color: #5a4a20;
+      font-size: 11px;
+      line-height: 1.3;
+      white-space: pre;
+      user-select: none;
+    }
+
+    /* Output area */
+    #output {
+      padding: 16px 22px 8px;
+      min-height: 280px;
+      max-height: 60vh;
+      overflow-y: auto;
+      font-size: 14px;
+      line-height: 1.75;
+      color: #c8a44a;
+      /* Amber glow on text */
+      text-shadow: 0 0 8px rgba(200, 164, 74, 0.35);
+    }
+
+    #output::-webkit-scrollbar { width: 4px; }
+    #output::-webkit-scrollbar-track { background: transparent; }
+    #output::-webkit-scrollbar-thumb { background: #3a2e10; border-radius: 2px; }
+
+    .blank { height: 0.9em; }
+    .dim   { color: #7a6030; text-shadow: none; }
+    .echo  { color: #7ab0d4; text-shadow: 0 0 8px rgba(122,176,212,0.3); }
+    .bad   { color: #d46040; text-shadow: 0 0 8px rgba(212,96,64,0.4); }
+    .over  { color: #e05050; font-weight: bold; letter-spacing: 0.1em;
+              text-shadow: 0 0 12px rgba(220,80,80,0.5); }
+    .hint  { color: #6a5828; font-size: 12px; font-style: italic; }
+
+    /* Input row */
+    #input-row {
+      border-top: 1px solid #1e1c10;
+      padding: 12px 22px;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      background: #0c0c08;
+    }
+
+    #prompt-label {
+      color: #c8a44a;
+      white-space: nowrap;
+      font-size: 14px;
+      text-shadow: 0 0 8px rgba(200, 164, 74, 0.35);
+    }
+
+    #cmd-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #7ab0d4;
+      font-family: inherit;
+      font-size: 14px;
+      caret-color: #c8a44a;
+      text-shadow: 0 0 8px rgba(122,176,212,0.3);
+    }
+
+    /* Blink cursor when idle */
+    #cursor-blink {
+      display: inline-block;
+      width: 8px;
+      height: 14px;
+      background: #c8a44a;
+      vertical-align: middle;
+      animation: blink 1s step-end infinite;
+      opacity: 0;
+    }
+    #cmd-input:focus + #cursor-blink { display: none; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* Play again */
+    #restart-btn {
+      display: none;
+      margin: 10px 22px 16px;
+      padding: 8px 18px;
+      background: transparent;
+      border: 1px solid #4a3a14;
+      border-radius: 3px;
+      color: #a07828;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+      letter-spacing: 0.05em;
+      transition: all 0.15s;
+    }
+    #restart-btn:hover {
+      background: #1e1a08;
+      border-color: #c8a44a;
+      color: #c8a44a;
+    }
+  </style>
+</head>
+<body>
+<div id="terminal">
+
+  <div class="titlebar">
+    <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+    <span class="title-text">train_simulator.py — bash</span>
+    <div class="title-spacer"></div>
+  </div>
+
+  <!-- ASCII locomotive -->
+  <div class="loco">     ====        ___
+ _D _|  |_______/  )
+  |(_)---  |   H\  |
+  /     |  |   H |  |__/
+ |      |  |   H |     |
+  \_____| _|   |_|_____|</div>
+
+  <div id="output"></div>
+
+  <div id="input-row">
+    <span id="prompt-label">&gt;&nbsp;</span>
+    <input id="cmd-input" type="text" autofocus autocomplete="off" spellcheck="false" />
+    <span id="cursor-blink"></span>
+  </div>
+
+  <button id="restart-btn" onclick="restart()">▶ Play Again</button>
+
+</div>
+
+<script>
+  const out       = document.getElementById("output");
+  const inputRow  = document.getElementById("input-row");
+  const label     = document.getElementById("prompt-label");
+  const inp       = document.getElementById("cmd-input");
+  const restartBtn = document.getElementById("restart-btn");
+
+  let state = "intro";
+
+  // ── helpers ──────────────────────────────────────────────────
+  function print(text, cls = "") {
+    const d = document.createElement("div");
+    if (text === "") {
+      d.className = "blank";
+    } else {
+      d.className = cls ? cls : "";
+      d.textContent = text;
+    }
+    out.appendChild(d);
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function prompt(text) {
+    label.textContent = text;
+  }
+
+  function endGame() {
+    inputRow.style.display  = "none";
+    restartBtn.style.display = "block";
+  }
+
+  function restart() {
+    out.innerHTML = "";
+    inputRow.style.display   = "flex";
+    restartBtn.style.display = "none";
+    inp.value = "";
+    state = "intro";
+    begin();
+    inp.focus();
+  }
+
+  // ── game ─────────────────────────────────────────────────────
+  function begin() {
+    print("Welcome to Train Simulator!!!");
+    print("");
+    print("You are the engineer of a passenger train, and must drive");
+    print("your locomotive to the next station on schedule.");
+    print("You must decide how much heat and water to use");
+    print("when faced with a challenge.");
+    print("");
+    prompt("Understood? ");
+    state = "intro";
+  }
+
+  function handle(raw) {
+    const val = raw.trim().toLowerCase();
+
+    // echo the user's line
+    const echo = document.createElement("div");
+    echo.className = "echo";
+    echo.textContent = label.textContent + raw;
+    out.appendChild(echo);
+    print("");
+
+    // ── state: intro ──
+    if (state === "intro") {
+      print("A hill is approaching, and your locomotive starts to stall.");
+      print("");
+      print("You can use more coal to produce more steam, for more torque.");
+      print("More water means more steam, meaning more torque.");
+      print("You can also stop the locomotive temporarily to build up heat");
+      print("and steam, without using as many resources.");
+      print("");
+      prompt("Use more: Coal, Water, Both, or Stop? ");
+      state = "hill";
+      return;
+    }
+
+    // ── state: hill ──
+    if (state === "hill") {
+      let survived = false;
+
+      if (val === "coal") {
+        print("All the water in the boiler is evaporated, and the engine blows up,", "bad");
+        print("killing you and the fireman.", "bad");
+        survived = false;
+
+      } else if (val === "water") {
+        print("The boiler is cooled by the fresh water, and you are forced to wait");
+        print("for it to boil again. As a result, you are late to the next station.");
+        survived = true;
+
+      } else if (val === "both") {
+        if (Math.random() < 0.5) {
+          print("The locomotive clears the hill, but you are out of coal.");
+        } else {
+          print("The locomotive clears the hill, but you are out of water.");
+        }
+        print("Your train slows, and stops with the lack of steam.");
+        survived = true;
+
+      } else if (val === "stop") {
+        print("After waiting for a while, you clear the hill with relative ease.");
+        print("When arriving at the next station, you realise you are late.");
+        survived = true;
+
+      } else {
+        print("Type: Coal, Water, Both, or Stop.", "hint");
+        return; // don't advance state
+      }
+
+      print("");
+      if (survived) {
+        print("You are fired the next day, and without income,");
+        print("your family and you starve to death.");
+      }
+      print("");
+      print("— GAME OVER —", "over");
+
+      out.scrollTop = out.scrollHeight;
+      state = "end";
+      endGame();
+    }
+  }
+
+  // ── event listeners ───────────────────────────────────────────
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      const v = inp.value;
+      inp.value = "";
+      handle(v);
+    }
+  });
+
+  // ── start ─────────────────────────────────────────────────────
+  begin();
+</script>
+</body>
+</html>
